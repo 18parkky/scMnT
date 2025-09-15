@@ -323,9 +323,9 @@ def runGetLocusTable( STR_allele_table, filename, threads,
 def main():
     start_time  = time.time()
 
-    github_documentation_link = ""
+    github_documentation_link = "https://github.com/18parkky/scMnT"
 
-    script_description = f"Using STR allele table, generate STR locus table and allele length distribution information. For more information, see GitHub documentation: {github_documentation_link}"
+    script_description = f"[scMnT] Using STR allele table, generate STR locus table and allele length distribution information. For more information, see GitHub documentation: {github_documentation_link}"
     parser = argparse.ArgumentParser(description=script_description)
     
     PATH_script     = os.path.dirname(os.path.dirname(__file__))

@@ -72,8 +72,8 @@ def runscMSI_score( PATH_SCANPY_ADATA, PATH_STR_ALLELE_TABLE, filename, alleleTa
 def main():
     start_time  = time.time()
 
-    github_link = "https://github.com/18parkky/NanoMnT"
-    script_description = f"Given a Scanpy object (h5ad) and AlleleTable (tsv), label MSI score to the Scanpy object and save to disk"
+    github_link = "https://github.com/18parkky/scMnT"
+    script_description = f"[scMnT] Given a Scanpy object (h5ad) and AlleleTable (tsv), label MSI score to the Scanpy object and save to disk"
     parser = argparse.ArgumentParser(description=script_description)
 
     # Required parameters

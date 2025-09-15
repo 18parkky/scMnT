@@ -59,8 +59,8 @@ def runscMSI_find( PATH_NANOMNT_SCANPY_ADATA, NORMAL_CELLTYPES, MINIMUM_LOCI, fi
 def main():
     start_time  = time.time()
 
-    github_link = "https://github.com/18parkky/NanoMnT"
-    script_description = f"Given a MSI score-labeled Scanpy object (output of scMSI-score.py), find MSI cells"
+    github_link = "https://github.com/18parkky/scMnT"
+    script_description = f"[scMnT] Given a MSI score-labeled Scanpy object (output of scMSI-score.py), find MSI cells"
     parser = argparse.ArgumentParser(description=script_description)
 
     # Required parameters

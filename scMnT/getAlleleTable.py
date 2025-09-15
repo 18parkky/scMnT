@@ -443,8 +443,8 @@ def runGetAlleleTable( PATH_bam, PATH_str_tsv, PATH_reference_genome, mapq_thres
 def main():
     start_time  = time.time()
 
-    github_link = "https://github.com/18parkky/NanoMnT"
-    script_description = f"Given a BAM file, generate STR allele table. For more information, see GitHub: {github_link}"
+    github_link = "https://github.com/18parkky/scMnT"
+    script_description = f"[scMnT] Given a BAM file, generate STR allele table. For more information, see GitHub: {github_link}"
     parser = argparse.ArgumentParser(description=script_description)
     
     # script_PATH     = os.path.dirname(os.path.dirname(__file__))
