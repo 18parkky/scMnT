@@ -26,8 +26,8 @@ Before installing, ensure that the following packages are installed:
 After installing these packages, use the following commands to install scMnT.
 *You may consider creating a new Conda environment for scMnT.
 ```
-git clone -b scMnT https://github.com/18parkky/NanoMnT.git
-cd NanoMnT
+git clone https://github.com/18parkky/scMnT.git
+cd scMnT
 pip install .
 ```
 
