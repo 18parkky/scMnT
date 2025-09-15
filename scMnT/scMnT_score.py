@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import scanpy as sc
 
-import NanoMnT.nanomnt_utility as nanomnt_utility
+import scMnT.nanomnt_utility as nanomnt_utility
 
 def preprocessAlleleTable( AlleleTable, min_STR_length=10, max_STR_length=24, include_GC_repeats=False ):
     

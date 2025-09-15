@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import scanpy as sc
 
-import NanoMnT.nanomnt_utility as nanomnt_utility
+import scMnT.nanomnt_utility as nanomnt_utility
 
 def cliffs_delta(x, y):
     nx = len(x)
