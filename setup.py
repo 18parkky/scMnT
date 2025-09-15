@@ -10,11 +10,11 @@ setup(
     license='BSD 2-clause',
     packages=['scMnT'],
     entry_points={
-        'console_scripts' : [ 'getAlleleTable = src.getAlleleTable:main', 
-                             'getLocusTable = src.getLocusTable:main', 
-                             'findInformativeLoci = src.findInformativeLoci:main', 
-			     'scMnT-score = src.scMnT_score:main',
-			     'scMnT-find = src.scMnT_find:main',                             
+        'console_scripts' : [ 'getAlleleTable = scMnT.getAlleleTable:main', 
+                             'getLocusTable = scMnT.getLocusTable:main', 
+                             'findInformativeLoci = scMnT.findInformativeLoci:main', 
+			     'scMnT-score = scMnT.scMnT_score:main',
+			     'scMnT-find = scMnT.scMnT_find:main',                             
 ] 
     },
     install_requires=['pysam>=0.20.0',
