@@ -8,23 +8,94 @@ import pysam
 import logging
 import argparse
 import subprocess
-import numpy as np
 import Levenshtein
 import pandas as pd
 import multiprocessing
 
-import seaborn as sns 
-import matplotlib.pyplot as plt
-
-import scMnT.nanomnt_utility as nanomnt_utility
+import scmnt_utility
 
 PILEUP_LIMIT = 5000000 # pysam's pileup's default value for max_depth is 8000
 
+def create_STR_loci_batches(STR_table_chunk, adjacency_threshold):
+
+    batches = [ list() ]
+    for sequence, edf in STR_table_chunk.groupby('sequence', observed=True):
+        for tup in edf.sort_values('start').itertuples():
+            
+            # Assign locus to batch
+            for batch_idx in range(len(batches)):
+                if len(batches[batch_idx])==0:
+                    batches[batch_idx].append( tup.locus ) 
+                    break
+                else:
+                    locusA_end      = int(batches[batch_idx][-1].split('_')[3])
+                    locusB_start    = int(tup.start)
+                    distance = locusB_start - locusA_end
+                    if distance < adjacency_threshold: # If loci are adjacent, current locus needs to be assigned to another batch
+                        if batch_idx == len(batches)-1:
+                            batches.append( [tup.locus] )   # Create new batch if out of batch
+                            break
+                        else:
+                            continue
+                    else:
+                        batches[batch_idx].append( tup.locus )
+                        break
+                    
+    STR_table_chunk_batches = list()
+    for batch in batches:
+        STR_table_chunk_batches.append( STR_table_chunk[(STR_table_chunk['locus'].isin( batch ))] )
+    
+    return STR_table_chunk_batches
+
+def identify_poly_loci_reads(PATH_bam, STR_table, flanking_length, mapq_threshold):
+    bamfile = pysam.AlignmentFile(PATH_bam, 'rb')
+    dict_readname_to_loci = dict()
+    for tup in STR_table.itertuples():
+        chrom = tup.sequence 
+        start, end = tup.start, tup.end
+        for read in bamfile.fetch(chrom, start - 1 - flanking_length, end + flanking_length):
+            if read.is_secondary or read.is_supplementary or read.is_duplicate:
+                continue
+            if read.mapping_quality < mapq_threshold:
+                continue
+            try:
+                dict_readname_to_loci[read.query_name].append( tup.locus )
+            except KeyError:
+                dict_readname_to_loci[read.query_name] = [ tup.locus ]
+    
+    poly_loci_reads = set()
+    dict_locus_to_polyLociReads = dict()
+    for readname, loci in dict_readname_to_loci.items():
+        if len(loci)==1: continue 
+        
+        poly_loci_reads.add(readname)
+        for locus in loci:
+            try: dict_locus_to_polyLociReads[locus].append(readname)
+            except KeyError: dict_locus_to_polyLociReads[locus] = [ readname ]
+        
+    return poly_loci_reads, dict_locus_to_polyLociReads
+
+def chunk_genes_by_counts(STR_table, dict_locus_to_readcount, threads):
+    # Initialize partitions
+    loci_chunks = [dict() for i in range(threads)]
+    chunk_sums  = [0 for i in range(threads)]
+    
+    # Sort genes by read count
+    dict_locus_to_readcount_sorted = sorted(dict_locus_to_readcount.items(), key=lambda x: x[1], reverse=True)
+    
+    # Greedy assignment: put each gene in the partition with the smallest sum
+    for locus, readcount in dict_locus_to_readcount_sorted:
+        idx = chunk_sums.index(min(chunk_sums)) # Find index of partition with the lowest sum so far
+        loci_chunks[idx][locus] = readcount
+        chunk_sums[idx] += readcount
+        
+    chunks = list()
+    for loci_chunk in loci_chunks:
+        chunks.append( STR_table[(STR_table['locus'].isin( loci_chunk ))] )
+    
+    return chunks
+
 def correctAllele(STR_allele_table, dist_threshold=None):
-    """
-    description:    Supplementary figure
-    return:         (dictionary, list)
-    """
     dict_allele_to_correctedAllele = dict()
     removed = list() 
         
@@ -99,118 +170,160 @@ def getFlankingSequence( pysam_fasta_obj, contig, start, end, flanking_length ):
         
     return (lf, rf)
 
+def extract_STR_reads(STR_table, poly_loci_reads, PATH_temp, PATH_bamfile, flanking_length, mapq_threshold):
+    bamfile = pysam.AlignmentFile(PATH_bamfile, "rb")
+    PATH_MS_reads_fasta = f'{PATH_temp}/reads.fasta'
+    
+    dict_readnames_to_CB_UMI = dict()
+    
+    with open(PATH_MS_reads_fasta, 'w') as fasta:
+    
+        for tup in STR_table.itertuples():
+            chrom, start, end = str(tup.sequence), tup.start, tup.end
+            
+            for read in bamfile.fetch(chrom, start - 1 - flanking_length, end + flanking_length):
+                if read.is_secondary or read.is_supplementary or read.is_duplicate:
+                    continue
+                if read.mapping_quality < mapq_threshold:
+                    continue
 
-# def load_SSR_table( PATH_str_tsv, required_columns, PATH_log=None ):
-#     """ 
-#     Determine whether the given Krait (or pytrf) file is appropriate.
-#     """
-#     STR_input_type = None
-#     try:
-#         ssr_tsv = open( PATH_str_tsv, "r" )
-#     except:
-#         ssr_tsv = gzip.open( PATH_str_tsv, "r" )
-        
-#     for line in ssr_tsv:
-#         columns = line.strip().split("\t")
-#         if len( set(columns).intersection( set(required_columns) ) ) == 0:                    
-#             STR_input_type = "pytrf"
-#             break
-#         else:
-#             STR_input_type = "krait"
-#             break
+                qname = read.query_name
+                CB = read.get_tag("CB") if read.has_tag("CB") else None
+                UMI = read.get_tag("UB") if read.has_tag("UB") else None
+
+                dict_readnames_to_CB_UMI[qname] = [CB, UMI]
                 
-#     if STR_input_type == None: # Raise error if STR_input_type wasn't determinedß
-#         raise ValueError
-#     if PATH_log != None:
-#         logging.basicConfig(filename=PATH_log, level=logging.INFO)
-#         logging.info( f"SSR table identified as:\t{STR_input_type}-generated" )
+                if qname in poly_loci_reads: continue 
+                fasta.write(f'>{qname}\n{read.get_forward_sequence()}\n')
 
-#     if STR_input_type == "pytrf":
-#         STR_table = pd.read_csv(PATH_str_tsv, sep='\t', names=required_columns) 
-#     elif STR_input_type == "krait":
-#         STR_table = pd.read_csv(PATH_str_tsv, sep='\t')
+    return dict_readnames_to_CB_UMI
+
+def create_STR_reference(STR_table, realignment_flanking_length, PATH_reference_genome, placeholder_length, PATH_temp):
     
-#     ssr_tsv.close()
-    
-#     STR_table = STR_table.sample( frac=1, random_state=0 ).reset_index(drop=True) # shuffle STR table for even distribution of loci among chunks
-#     return STR_table
-
-
-def realign( bamfile, region, PATH_reference_genome, flanking_length, mapq_threshold, fasta_flanking_length, placeholder_length, sc, PATH_temp, ):
-
-    # (1) Collect reads that align to the given STR region
-    dict_reads = dict()
-    for pileupcolumn in bamfile.pileup(region[0], region[3] - 1 - flanking_length, region[4] + flanking_length, truncate=True, min_base_quality = 0, min_mapping_quality = mapq_threshold, max_depth=PILEUP_LIMIT): #!#!#!#!#!#!#!#!#!#! min_base_quality 1 -> 0
-        for pileupread in pileupcolumn.pileups:
-            if (pileupread.alignment.is_secondary == False and pileupread.alignment.is_supplementary == False):
-                if pileupread.alignment.query_name not in dict_reads.keys():
-                    
-                    if sc == True:
-                        
-                        try:
-                            CB = pileupread.alignment.get_tag("CB")
-                        except: 
-                            CB = None 
-                            
-                        try:
-                            UMI = pileupread.alignment.get_tag("UB")
-                        except: 
-                            UMI = None      
-                            
-                    else:
-                        CB  = None 
-                        UMI = None
-                        
-                    dict_reads[pileupread.alignment.query_name] = [pileupread.alignment.get_forward_sequence(), CB, UMI]
-    
-    # (2) Create temporary Fasta file that contains the given STR region sequence and its flankings
-    STR_name = f"{region[0]}_{region[1]}x{region[2]}_{region[3]}"
+    PATH_fasta = f"{PATH_temp}/ref.fasta"
     pysam_genome = pysam.FastaFile(PATH_reference_genome)
-    with open(f"{PATH_temp}/{STR_name}.ref.fasta", "w") as fasta:
-        lf, rf  = getFlankingSequence( pysam_genome, region[0], region[3], region[4], fasta_flanking_length )
-        placeholder_sequence = region[1] * placeholder_length
-        fasta.write(f">{region[0]}\n")
-        fasta.write(f"{lf}{placeholder_sequence}{rf}\n")
     
-    # (3) Create temporary Fasta file for reads that align to this STR region
-    with open(f"{PATH_temp}/{STR_name}.reads.fasta", "w") as fasta:
-        for readname, readinfo in dict_reads.items():
-            sequence        = readinfo[0]
-            fasta.write(f">{readname}\n")
-            fasta.write(f"{sequence}\n")
+    with open(PATH_fasta, "w") as fasta: 
+        for tup in STR_table.itertuples():
+            chrom = tup.sequence 
+            motif = tup.motif 
+            repeat = tup.repeat 
+            start, end = tup.start, tup.end
             
-    # (4) Align using minimap2
-    STR_name = f"{region[0]}_{region[1]}x{region[2]}_{region[3]}"
-    realigned_bam_out = f"{PATH_temp}/{STR_name}.sorted.bam"
-    command = f"minimap2 -a -A 4 -B 10 -t 1 {PATH_temp}/{STR_name}.ref.fasta {PATH_temp}/{STR_name}.reads.fasta | samtools view -Sb -F0x900 | samtools sort > {realigned_bam_out}"
-    subprocess.call(command, shell=True)
-    pysam.index(realigned_bam_out)
- 
-    # (5) If sc==True, set CB and UMI tags to realigned BAM
-    if sc == True:
-        realigned_bamfile = pysam.AlignmentFile(realigned_bam_out, "rb")
-        realigned_tagged_bam_out = f"{PATH_temp}/{STR_name}.sorted.tagged.bam"
-        realigned_tagged_bamfile = pysam.AlignmentFile(realigned_tagged_bam_out, "wb", template=realigned_bamfile)
-        for read in realigned_bamfile.fetch():
-            read_name = read.query_name
-            read.set_tag( "CB", dict_reads[read_name][1] )
-            read.set_tag( "UB", dict_reads[read_name][2] )
-            
-            realigned_tagged_bamfile.write(read)
-            
-        realigned_tagged_bamfile.close()
+            STR_name = f'{chrom}_{motif}x{repeat}_{start}_{end}'
+            lf, rf  = getFlankingSequence( pysam_genome, chrom, start, end, realignment_flanking_length )
+            placeholder_sequence = motif * placeholder_length
+            fasta.write(f">{STR_name}\n")
+            fasta.write(f"{lf}{placeholder_sequence}{rf}\n")
+    return
 
-        # Delete realigned BAM
-        os.remove( realigned_bam_out )
-        os.rename( realigned_tagged_bam_out, realigned_bam_out)
-        pysam.index(realigned_bam_out)
-
-    # Delete temporary FASTA files
-    tempFiles = glob.glob(f"{PATH_temp}/{STR_name}*.fasta")
-    for file in tempFiles:
-        os.remove( file )
+def tag_BAM(dict_readnames_to_CB_UMI, PATH_realigned_bam_out, PATH_realigned_tagged_bam_out,):
+    realigned_bamfile = pysam.AlignmentFile(PATH_realigned_bam_out, "rb")
+    
+    realigned_tagged_bamfile = pysam.AlignmentFile(PATH_realigned_tagged_bam_out, "wb", template=realigned_bamfile)
+    for read in realigned_bamfile.fetch():
+        read_name = read.query_name
+        read.set_tag( "CB", dict_readnames_to_CB_UMI[read_name][0] )
+        read.set_tag( "UB", dict_readnames_to_CB_UMI[read_name][1] )
+        realigned_tagged_bamfile.write(read)
         
-    return  
+    realigned_tagged_bamfile.close()
+
+    # Delete realigned BAM
+    os.remove( PATH_realigned_bam_out )
+    os.rename( PATH_realigned_tagged_bam_out, PATH_realigned_bam_out)
+    pysam.index(PATH_realigned_bam_out)
+    return
+
+def collect_realignment_info(PATH_realigned_bam_out, placeholder_length, realignment_flanking_length, flanking_length, mapq_threshold):
+    dict_readname_to_STRinfo = dict()
+    realigned_bamfile = pysam.AlignmentFile(PATH_realigned_bam_out, 'rb')
+
+    for STR_locus in realigned_bamfile.references:
+        
+        chrom, motif_repeat, start, end = STR_locus.split('_')
+        motif, repeat = motif_repeat.split('x')
+        
+        bool_firstIteration = False
+        
+        pileup_start_pos    = realignment_flanking_length - flanking_length
+        pileup_end_pos      = realignment_flanking_length + flanking_length + (placeholder_length * len(motif))
+
+        for pileupcolumn in realigned_bamfile.pileup(STR_locus, pileup_start_pos, pileup_end_pos, truncate=True, min_base_quality = 0, min_mapping_quality = mapq_threshold, max_depth=PILEUP_LIMIT): 
+            for pileupread in pileupcolumn.pileups:
+                
+                read_name = pileupread.alignment.query_name
+                
+                # First iteration 
+                if bool_firstIteration == False and pileupcolumn.pos == realignment_flanking_length - flanking_length:
+            
+                    try:
+                        CB = pileupread.alignment.get_tag("CB")
+                    except: 
+                        CB = None 
+                        
+                    try:
+                        UMI = pileupread.alignment.get_tag("UB")
+                    except: 
+                        UMI = None 
+
+                        
+                    dict_readname_to_STRinfo[read_name] = ["", flanking_length, flanking_length, pileupread.alignment.flag, CB, UMI, STR_locus]
+                
+                if read_name in dict_readname_to_STRinfo.keys():
+                    if not pileupread.is_refskip:
+
+                        if pileupread.is_del:
+                            dict_readname_to_STRinfo[read_name][0] += "*"
+                            
+                        elif pileupread.is_tail: # Reads that simply finished or have clippings within the region are filtered in this line
+                            del dict_readname_to_STRinfo[read_name] 
+                            
+                        else: 
+                            if pileupread.indel == 0:
+                                dict_readname_to_STRinfo[read_name][0] += pileupread.alignment.query_sequence[pileupread.query_position]
+                            elif pileupread.indel > 0: # insertion(s) ahead
+                                
+                                if pileupcolumn.pos == realignment_flanking_length - 1:
+                                    dict_readname_to_STRinfo[read_name][0] += ( pileupread.alignment.query_sequence[pileupread.query_position] + pileupread.alignment.query_sequence[pileupread.query_position+1:pileupread.query_position+pileupread.indel+1])
+
+                                elif pileupcolumn.pos < realignment_flanking_length - 1: # When insertion is before STR seq
+                                    dict_readname_to_STRinfo[read_name][0] += ( pileupread.alignment.query_sequence[pileupread.query_position] + pileupread.alignment.query_sequence[pileupread.query_position+1:pileupread.query_position+pileupread.indel+1].lower())
+                                    dict_readname_to_STRinfo[read_name][1] += pileupread.indel
+
+                                elif pileupcolumn.pos > realignment_flanking_length + flanking_length - 1: # When insertion is after STR seq
+                                    dict_readname_to_STRinfo[read_name][0] += ( pileupread.alignment.query_sequence[pileupread.query_position] + pileupread.alignment.query_sequence[pileupread.query_position+1:pileupread.query_position+pileupread.indel+1].lower())
+                                    dict_readname_to_STRinfo[read_name][2] += pileupread.indel
+
+                            elif pileupread.indel < 0: # Deletions
+                                dict_readname_to_STRinfo[read_name][0] += pileupread.alignment.query_sequence[pileupread.query_position]
+    return dict_readname_to_STRinfo
+
+def summarize_STR_info(dict_readname_to_STRinfo, batch_idx, PATH_temp):
+    AlleleTable_i = list()
+    for readname, STRinfo in dict_readname_to_STRinfo.items():
+        left_flanking_sequence  = STRinfo[0][ :STRinfo[1] ]
+        right_flanking_sequence = STRinfo[0][ -STRinfo[2]: ]
+        STR_sequence            = STRinfo[0][ STRinfo[1] : -STRinfo[2] ].replace("*", "")
+        
+        locus_parts = STRinfo[6].split('_')
+        chrom, start, end = str(locus_parts[0]), int(locus_parts[2]), int(locus_parts[3])
+        motif = locus_parts[1].split('x')[0]
+        
+        flag                    = STRinfo[3]
+        CB, UMI                 = STRinfo[4], STRinfo[5] 
+        reference_STR_allele = int(locus_parts[1].split('x')[1])
+        if CB==None or UMI==None: continue
+        
+        AlleleTable_i.append( [readname, f"{chrom}:{start}-{end}", motif, STR_sequence, reference_STR_allele, left_flanking_sequence, right_flanking_sequence, flag, CB, UMI] )
+        
+    if len(AlleleTable_i)!=0:
+        scmnt_utility.saveWithPickle(AlleleTable_i, PATH_temp, f'AlleleTable_temp_batch{batch_idx}')
+        
+    # Delete realigned BAM file
+    os.remove(f"{PATH_temp}/realigned.sorted.bam")
+    os.remove(f"{PATH_temp}/realigned.sorted.bam.bai")
+    return
 
 def errorCorrection_multiprocess( STR_allele_table_chunk, distance, process_num, PATH_multiprocess_out ):
     
@@ -235,170 +348,173 @@ def errorCorrection_multiprocess( STR_allele_table_chunk, distance, process_num,
 
     return 
 
-def extractSTR_multiprocess( PATH_bamfile, STR_table, PATH_reference_genome, flanking_length, realignment_f, mapq_threshold, sc, PATH_temp ):
+def extractSTR_multiprocess( PATH_bamfile, STR_table_chunk, PATH_reference_genome, flanking_length, realignment_flanking_length, mapq_threshold, PATH_temp ):
     
-    for tup in STR_table.itertuples():
+    STR_table_chunk_batches = create_STR_loci_batches(STR_table_chunk, realignment_flanking_length * 2)
+    
+    for batch_idx, STR_table in enumerate(STR_table_chunk_batches):
         
-        # (1) Realign reads using minimap2 via subprocess
-        STR_region = [ str(tup.sequence), tup.motif, tup.repeat, tup.start, tup.end ]
-        fasta_flanking_length = realignment_f
-        bamfile = pysam.AlignmentFile(PATH_bamfile, "rb")
+        # (0) Identify reads that map to a single or multiple STR loci
+        poly_loci_reads, dict_locus_to_polyLociReads = identify_poly_loci_reads(PATH_bamfile, STR_table, flanking_length, mapq_threshold)
+        
+        # (1) Extract reads that map to STR loci
+        dict_readnames_to_CB_UMI = extract_STR_reads(STR_table, poly_loci_reads, PATH_temp, PATH_bamfile, flanking_length, mapq_threshold)
+
+        # (2) Create custom reference FASTA for STR loci
         placeholder_length = 50
-        realign(bamfile, STR_region, PATH_reference_genome, flanking_length, mapq_threshold, fasta_flanking_length, placeholder_length, sc, PATH_temp )
+        create_STR_reference(STR_table, realignment_flanking_length, PATH_reference_genome, placeholder_length, PATH_temp)
         
-        # (2) Get the realigned STR information of each read
-        STR_name = f"{STR_region[0]}_{STR_region[1]}x{STR_region[2]}_{STR_region[3]}"
-        realigned_bamfile = pysam.AlignmentFile(f"{PATH_temp}/{STR_name}.sorted.bam", "rb")
+        # (3) Minimap2
+        PATH_realigned_bam_out = f"{PATH_temp}/realigned.sorted.bam"
+        command = f"minimap2 -a -A 4 -B 10 -t 1 {PATH_temp}/ref.fasta {PATH_temp}/reads.fasta 2>/dev/null | samtools view -Sb -F0x900 | samtools sort > {PATH_realigned_bam_out}"   # Filter out supplementary & secondary
+        subprocess.call(command, shell=True)
+        pysam.index(PATH_realigned_bam_out)
         
-        dict_readname_to_STRinfo = dict() # key: read_name, value: [STR_seq, base quality, int_left_padding, int_right_padding, flag]
-        bool_firstIteration = False
-        
-        pileup_start_pos    = fasta_flanking_length - flanking_length
-        pileup_end_pos      = fasta_flanking_length + flanking_length + (placeholder_length * len(tup.motif))
-    
-        for pileupcolumn in realigned_bamfile.pileup(STR_region[0], pileup_start_pos, pileup_end_pos, truncate=True, min_base_quality = 0, min_mapping_quality = mapq_threshold, max_depth=PILEUP_LIMIT): 
-
-            for pileupread in pileupcolumn.pileups:
-
-                read_name = pileupread.alignment.query_name
-
-                # First iteration 
-                if bool_firstIteration == False and pileupcolumn.pos == fasta_flanking_length - flanking_length:
+        # (4) Set CB and UMI tags to realigned BAM
+        tag_BAM(dict_readnames_to_CB_UMI, PATH_realigned_bam_out, f'{PATH_temp}/realigned.sorted.tagged.bam',)
             
-                    if sc == True:
-                        try:
-                            CB = pileupread.alignment.get_tag("CB")
-                        except: 
-                            CB = None 
-                            
-                        try:
-                            UMI = pileupread.alignment.get_tag("UB")
-                        except: 
-                            UMI = None 
-                    
-                    else:
-                        CB = None 
-                        UMI = None 
-                        
-                    dict_readname_to_STRinfo[read_name] = ["", flanking_length, flanking_length, pileupread.alignment.flag, CB, UMI,]
+        # (5) Delete FASTA files since we now have the realigned BAM
+        tempFiles = glob.glob(f"{PATH_temp}/*.fasta")
+        for file in tempFiles:
+            os.remove( file )
+            
+        # (6) Collect STR information for each re-aligned read
+        # key: read_name, value: [STR_seq, base quality, int_left_padding, int_right_padding, flag]
+        dict_readname_to_STRinfo = collect_realignment_info(PATH_realigned_bam_out, placeholder_length, realignment_flanking_length, flanking_length, mapq_threshold,)
+        
+        # (7) Process poly locus reads 
+        bamfile = pysam.AlignmentFile(PATH_bamfile, 'rb')
+        pysam_genome = pysam.FastaFile(PATH_reference_genome)
+
+        for tup in STR_table[(STR_table['locus'].isin( list(dict_locus_to_polyLociReads.keys()) ))].itertuples():
+            chrom, start, end, motif = tup.sequence, tup.start, tup.end, tup.motif
+
+            read_fasta = open(f'{PATH_temp}/{tup.locus}_reads.fasta', 'w')
+            for read in bamfile.fetch(chrom, start - 1 - flanking_length, end + flanking_length):
+                if read.is_secondary or read.is_supplementary or read.is_duplicate:
+                    continue
+                if read.mapping_quality < mapq_threshold:
+                    continue
+                if read.query_name not in poly_loci_reads: continue 
+                read_fasta.write(f'>{read.query_name}\n{read.get_forward_sequence()}\n')
+            read_fasta.close()
+            
+            ref_fasta = open(f'{PATH_temp}/{tup.locus}_ref.fasta', 'w')
+            lf, rf  = getFlankingSequence( pysam_genome, chrom, start, end, realignment_flanking_length )
+            placeholder_sequence = motif * placeholder_length
+            ref_fasta.write(f">{tup.locus}\n")
+            ref_fasta.write(f"{lf}{placeholder_sequence}{rf}\n")
+            ref_fasta.close()
+            
+            PATH_s_realigned_bam_out = f'{PATH_temp}/{tup.locus}_realigned.sorted.bam'
+            command = f"minimap2 -a -A 4 -B 10 -t 1 {PATH_temp}/{tup.locus}_ref.fasta {PATH_temp}/{tup.locus}_reads.fasta 2>/dev/null | samtools view -Sb -F0x900 | samtools sort > {PATH_s_realigned_bam_out}"   # Filter out supplementary & secondary
+            subprocess.call(command, shell=True)
+            pysam.index(PATH_s_realigned_bam_out)
+            
+            PATH_s_realigned_tagged_bam_out = f'{PATH_temp}/{tup.locus}.sorted.tagged.bam'
+            try:
+                tag_BAM(dict_readnames_to_CB_UMI, PATH_s_realigned_bam_out, PATH_s_realigned_tagged_bam_out)
+            except ValueError: 
+                continue 
+            
+            dict_s_readname_to_STRinfo = collect_realignment_info(PATH_s_realigned_bam_out, placeholder_length, realignment_flanking_length, flanking_length, mapq_threshold)
                 
-                if read_name in dict_readname_to_STRinfo.keys():
-                    if not pileupread.is_refskip:
+            for k,v in dict_s_readname_to_STRinfo.items(): 
+                dict_readname_to_STRinfo[k]=v 
+                
+            os.remove(f'{PATH_temp}/{tup.locus}_ref.fasta')
+            os.remove(f'{PATH_temp}/{tup.locus}_reads.fasta')
+            os.remove(PATH_s_realigned_bam_out)
+            os.remove(f'{PATH_s_realigned_bam_out}.bai')
 
-                        if pileupread.is_del:
-                            dict_readname_to_STRinfo[read_name][0] += "*"
-                            
-                        elif pileupread.is_tail: # Reads that simply finished or have clippings within the region are filtered in this line
-                            del dict_readname_to_STRinfo[read_name] 
-                            
-                        else: 
-                            if pileupread.indel == 0:
-                                dict_readname_to_STRinfo[read_name][0] += pileupread.alignment.query_sequence[pileupread.query_position]
-                            elif pileupread.indel > 0: # insertion(s) ahead
-                                
-                                if pileupcolumn.pos == fasta_flanking_length - 1:
-                                    dict_readname_to_STRinfo[read_name][0] += ( pileupread.alignment.query_sequence[pileupread.query_position] + pileupread.alignment.query_sequence[pileupread.query_position+1:pileupread.query_position+pileupread.indel+1])
+        # (8) Summarize realignment results
+        summarize_STR_info(dict_readname_to_STRinfo, batch_idx, PATH_temp)
 
-                                elif pileupcolumn.pos < fasta_flanking_length - 1: # When insertion is before STR seq
-                                    dict_readname_to_STRinfo[read_name][0] += ( pileupread.alignment.query_sequence[pileupread.query_position] + pileupread.alignment.query_sequence[pileupread.query_position+1:pileupread.query_position+pileupread.indel+1].lower())
-                                    dict_readname_to_STRinfo[read_name][1] += pileupread.indel
-
-                                elif pileupcolumn.pos > fasta_flanking_length + flanking_length - 1: # When insertion is after STR seq
-                                    dict_readname_to_STRinfo[read_name][0] += ( pileupread.alignment.query_sequence[pileupread.query_position] + pileupread.alignment.query_sequence[pileupread.query_position+1:pileupread.query_position+pileupread.indel+1].lower())
-                                    dict_readname_to_STRinfo[read_name][2] += pileupread.indel
-
-                            elif pileupread.indel < 0: # Deletions
-                                dict_readname_to_STRinfo[read_name][0] += pileupread.alignment.query_sequence[pileupread.query_position]  
-      
-    
-        # (3) Store read information to pickle and write to temporary PATH
-        alleleTable_entries = list()                    
-        for readname, strInfo in dict_readname_to_STRinfo.items():
-            
-            left_flanking_seq   = strInfo[0][ :strInfo[1] ]
-            str_seq             = strInfo[0][ strInfo[1] : -strInfo[2] ].replace("*", "")
-            right_flanking_seq  = strInfo[0][ -strInfo[2]: ]
-            reference_STR_allele = int( (STR_region[4] - STR_region[3] + 1) / len(STR_region[1]) )
-            flag = strInfo[3]
-            CB, UMI = strInfo[4], strInfo[5] 
-            
-            alleleTable_entries.append( [readname, f"{STR_region[0]}:{STR_region[3]}-{STR_region[4]}", STR_region[1], str_seq, reference_STR_allele, left_flanking_seq, right_flanking_seq, flag, CB, UMI] )
-        
-        if len(alleleTable_entries) != 0:
-            nanomnt_utility.saveWithPickle(alleleTable_entries, PATH_temp, STR_name)
-
-        # Delete realigned BAM file
-        os.remove(f"{PATH_temp}/{STR_name}.sorted.bam")
-        os.remove(f"{PATH_temp}/{STR_name}.sorted.bam.bai")
-
-    return  
-
-def runGetAlleleTable( PATH_bam, PATH_str_tsv, PATH_reference_genome, mapq_threshold, threads, flanking_length, realignment_f, sc, start_time, PATH_log, DIR_out ):
-    logging.basicConfig(filename=PATH_log, level=logging.INFO)
-    
-    bam_filename = os.path.splitext(os.path.basename(PATH_bam))[0]
-    
-    # (1) Create folder for storing temporary files
-    PATH_multiprocess_out = f"{DIR_out}/{bam_filename}.multiprocessing_temp"
-    nanomnt_utility.checkAndCreate( DIR_out )
-    nanomnt_utility.checkAndCreate( PATH_multiprocess_out )
-        
-    # (2) Prepare and chunk Krait SSR table    
-    required_columns = ["sequence", "start", "end", "motif", "type", "repeat", "length"]
-    # STR_table = load_SSR_table( PATH_str_tsv, required_columns, PATH_log )
-    STR_table = pd.read_csv(PATH_str_tsv, sep='\t')
-    STR_table = STR_table.sample(frac=1) # shuffle STR_table
-        
-    try:
-        chunk_size = math.ceil( len(STR_table) / threads )
-        STR_table_chunks = [STR_table[i:i+chunk_size] for i in range(0,STR_table.shape[0],chunk_size)]
-    except ValueError: # Occurs when chunk size < threads
-        logging.error(f"Number of input STR loci ({len(STR_table)}) is less than number of threads to use! Try reducing the number of threads to use.\t(elapsed time: {nanomnt_utility.getElapsedTime(start_time)} seconds)")
-        raise ValueError
-    
-    # (4) Multiprocess using multiprocessing
-    processes = list()
-    logging.info(f"Starting multiprocessing with {threads}")
-    
-    # bamfile = pysam.AlignmentFile(PATH_bam, "rb")
-    
-    for idx, STR_chunk in enumerate(STR_table_chunks):
-        PATH_temp = f"{PATH_multiprocess_out}/thread_{idx+1}"
-        nanomnt_utility.checkAndCreate(PATH_temp)
-        
-        p = multiprocessing.Process(target=extractSTR_multiprocess,
-                                    args=[PATH_bam, STR_chunk, PATH_reference_genome, flanking_length, realignment_f, mapq_threshold, sc, PATH_temp] )
-        p.start()
-        processes.append(p)
-    for process in processes:
-        process.join()
-    
-    # (5) Collect multiprocessing results  
-    alleleTable_entries = list()
-    for i in range(len( STR_table_chunks )):
+def cleanup_multiprocessing_results(PATH_multiprocess_out, threads, start_time):
+    # (4) Collect multiprocessing results  
+    AlleleTable = list()
+    for i in range(threads):
         idx = i + 1
-        
         list_PATH_pickles = glob.glob(f"{PATH_multiprocess_out}/thread_{idx}/*.pickle")
         
         for PATH_pickle in list_PATH_pickles:
-            cur_alleleTable_entries = nanomnt_utility.loadFromPickle(PATH_pickle)
+            cur_alleleTable_entries = scmnt_utility.loadFromPickle(PATH_pickle)
             for entry in cur_alleleTable_entries:
-                alleleTable_entries.append( entry )
+                AlleleTable.append( entry )
             
             # Delete pickle files
             os.remove(PATH_pickle)
         
         os.rmdir( f"{PATH_multiprocess_out}/thread_{idx}" )
+        
+    AlleleTable = pd.DataFrame(AlleleTable, columns=["read_name", "locus", "repeat_unit", "allele", "reference_STR_allele", "left_flanking_seq", "right_flanking_seq", "flag", "CB", "UMI"])
+    logging.info(f"Total of {len(set(AlleleTable['locus']))} microsatellite loci detected.\t(elapsed time: {scmnt_utility.getElapsedTime(start_time)} seconds)")
+    
+    return AlleleTable 
 
-    df_alleleTable = pd.DataFrame(alleleTable_entries, columns=["read_name", "locus", "repeat_unit", "allele", "reference_STR_allele", "left_flanking_seq", "right_flanking_seq", "flag", "CB", "UMI"])
-    logging.info(f"Total of {len(set(df_alleleTable.locus))} microsatellite loci detected.\t(elapsed time: {nanomnt_utility.getElapsedTime(start_time)} seconds)")
+def prepare_STR_chunks( PATH_str_tsv, PATH_bamfile, mapq_threshold, threads, start_time ):
+    STR_table = pd.read_csv(PATH_str_tsv, sep='\t')
+    STR_table['locus'] = [ f'{tup.sequence}_{tup.motif}x{tup.repeat}_{tup.start}_{tup.end}' for tup in STR_table.itertuples() ]
+    # STR_table = STR_table.sample(frac=1) # shuffle STR_table
+    loci_count = len(STR_table)
+        
+    # Chunk based on gene expressions
+    logging.info(f"Estimating read counts for each MS locus. (elapsed time: {scmnt_utility.getElapsedTime(start_time)} seconds)")
+    bamfile = pysam.AlignmentFile(PATH_bamfile, 'rb')
+    dict_locus_to_readcount = dict()
+    for tup in STR_table.itertuples():
+        chrom = tup.sequence 
+        start, end = tup.start, tup.end
+        dict_locus_to_readcount[tup.locus] = 0
+        for read in bamfile.fetch(chrom, start - 1, end):
+            if read.is_secondary or read.is_supplementary or read.is_duplicate:
+                continue
+            if read.mapping_quality < mapq_threshold:
+                continue 
+            dict_locus_to_readcount[tup.locus] += 1
+            
+    dict_locus_to_nonzero_readcount = { k:v for k,v in dict_locus_to_readcount.items() if v>0 }
+    
+    STR_table = STR_table[(STR_table['locus'].isin( dict_locus_to_nonzero_readcount.keys() ))].copy()
+    
+    logging.info(f"Processing {len(dict_locus_to_nonzero_readcount)} loci instead of {loci_count} loci (elapsed time: {scmnt_utility.getElapsedTime(start_time)} seconds)")
 
+    STR_table_chunks = chunk_genes_by_counts(STR_table, dict_locus_to_nonzero_readcount, threads)
+    return STR_table_chunks
+
+def runGetAlleleTable( PATH_bam, PATH_str_tsv, PATH_reference_genome, mapq_threshold, threads, flanking_length, realignment_flanking_length, start_time, filename, DIR_out ):
+        
+    # (1) Create folder for storing temporary files
+    PATH_multiprocess_out = f"{DIR_out}/{filename}.multiprocessing_temp"
+    scmnt_utility.checkAndCreate( DIR_out )
+    scmnt_utility.checkAndCreate( PATH_multiprocess_out )
+        
+    # (2) Prepare and chunk Krait SSR table
+    STR_table_chunks = prepare_STR_chunks( PATH_str_tsv, PATH_bam, mapq_threshold, threads, start_time )
+    
+    # (3) Multiprocessing
+    processes = list()
+    logging.info(f"Starting multiprocessing with {threads}")    
+    for idx, STR_chunk in enumerate(STR_table_chunks):
+        PATH_temp = f"{PATH_multiprocess_out}/thread_{idx+1}"
+        scmnt_utility.checkAndCreate(PATH_temp)
+        
+        p = multiprocessing.Process(target=extractSTR_multiprocess,
+                                    args=[PATH_bam, STR_chunk, PATH_reference_genome, flanking_length, realignment_flanking_length, mapq_threshold, PATH_temp] )
+        p.start()
+        processes.append(p)
+    for process in processes:
+        process.join()
+    
+    # (4) Collect multiprocessing results  
+    AlleleTable = cleanup_multiprocessing_results(PATH_multiprocess_out, threads, start_time)
+    
     # (6) Prepare error correction 
     try:
-        chunk_size = math.ceil( len(df_alleleTable) / threads )
-        STR_allele_table_chunks = [df_alleleTable[i:i+chunk_size] for i in range(0,df_alleleTable.shape[0],chunk_size)]
+        chunk_size = math.ceil( len(AlleleTable) / threads )
+        STR_allele_table_chunks = [AlleleTable[i:i+chunk_size] for i in range(0,AlleleTable.shape[0],chunk_size)]
     except ValueError: # Occurs when chunk size < threads
-        logging.error(f"Number of reads ({len(df_alleleTable)}) is less than number of threads to use! Multiprocessing won't be used for error-correction.")
+        logging.error(f"Number of reads ({len(AlleleTable)}) is less than number of threads to use! Multiprocessing won't be used for error-correction.")
     
     # (7) Start error correction
     processes = list()
@@ -417,28 +533,16 @@ def runGetAlleleTable( PATH_bam, PATH_str_tsv, PATH_reference_genome, mapq_thres
     df_concat_allele_table = pd.concat( [pd.read_csv(PATH_allele_table, sep='\t') for PATH_allele_table in list_PATH_allele_tables] )
     num_failed_reads    = df_concat_allele_table[(df_concat_allele_table["editing_distance"]==-1)].shape[0]
     correction_rate     = 100 * ( 1 - ( num_failed_reads / len(df_concat_allele_table) ) )
-    logging.info(f"Finished error-correction. (Correction rate: {round(correction_rate, 2)}%) (elapsed time: {nanomnt_utility.getElapsedTime(start_time)} seconds)")
+    logging.info(f"Finished error-correction. (Correction rate: {round(correction_rate, 2)}%) (elapsed time: {scmnt_utility.getElapsedTime(start_time)} seconds)")
 
-    bam_filename = os.path.splitext(os.path.basename(PATH_bam))[0]
     logging.info(f"Writing STR allele table to disk")
-    df_concat_allele_table.to_csv(f"{DIR_out}/{bam_filename}.STR_allele_table.tsv", sep='\t', index=False)
-    
+    df_concat_allele_table.to_csv(f"{DIR_out}/{filename}.AlleleTable.tsv", sep='\t', index=False)
 
     for PATH_allele_table in list_PATH_allele_tables:
         os.remove( PATH_allele_table )
-    
-    # list_temp_PATH = glob.glob(f"{PATH_multiprocess_out}/*")
-    # deleteAllPATHs = False
-    # for temp_PATH in list_temp_PATH:
-    #     if len(os.listdir(temp_PATH)) == 0:
-    #         os.rmdir(temp_PATH)
-    #         deleteAllPATHs = True
-    # if deleteAllPATHs == True:
-    #     os.rmdir(PATH_multiprocess_out)   
+        
     os.rmdir(PATH_multiprocess_out)
-    
     return
-
 
 def main():
     start_time  = time.time()
@@ -447,96 +551,75 @@ def main():
     script_description = f"[scMnT] Given a BAM file, generate STR allele table. For more information, see GitHub: {github_link}"
     parser = argparse.ArgumentParser(description=script_description)
     
-    # script_PATH     = os.path.dirname(os.path.dirname(__file__))
+    required = parser.add_argument_group('Required arguments')
+    optional = parser.add_argument_group('Optional arguments')
 
-    # reference_PATH  = os.path.join( script_PATH, "ref/genome" )
-    # krait_PATH      = os.path.join( script_PATH, "ref/krait" )
-
-    # PATH_default_krait           = f"{krait_PATH}/T2TCHM13_SSR.tsv.gz"
-
-    # Read paramters
     # Required parameters
-    parser.add_argument('-b', '--PATH_bam',      
+    required.add_argument('-b', '--PATH_bam',      
                         help="PATH to input BAM file (must be sorted and indexed)", 
                         required=True,
                         )
     
-    parser.add_argument('-s', '--PATH_str_tsv',  
+    required.add_argument('-s', '--PATH_str_tsv',  
                         help="PATH to STR list file generated using either Krait or Pytrf (.tsv)", 
                         required=True,
                         )    
     
-    parser.add_argument('-r', 
-                        "--PATH_ref_genome", help="PATH to reference genome (must be same as the one used for generating BAM)",
+    required.add_argument('-r', '--PATH_reference_genome', 
+                        help="PATH to reference genome (must be same as the one used for generating BAM)",
+                        required=True,
+                        )
+    
+    required.add_argument('-n', '--filename',      
+                        help="Name of the output files", 
                         required=True,
                         )
     
     # Optional parameters
-    parser.add_argument('-m', '--mapping_quality', 
-                        help="Mapping quality threshold when processing reads (default: 60)", 
-                        required=False, 
-                        type=int, 
-                        default=60,
-                        )
-    
-    parser.add_argument('-f', '--flanking',     
-                        help="Length of flanking sequences to collect for each read (default: 12)", 
+    optional.add_argument('-f', '--flanking',     
+                        help="Length of flanking sequences to collect for each read (default: 6)", 
                         required=False, 
                         type=int,
-                        default=12,
+                        default=6,
                         )
     
-    parser.add_argument('-rf', '--realignment_flanking',     
-                        help="Length of flanking sequences of STR to use as reference, during re-alignment process (default: 20000)", 
-                        required=False, 
-                        type=int,
-                        default=20000,
-                        )
-    
-    parser.add_argument('-t', '--threads',      
+    optional.add_argument('-t', '--threads',      
                         help="Number of threads (default: 4)",
                         required=False, 
                         type=int, 
                         default=4,
                         )
     
-    parser.add_argument('--sc',                 
-                        help="Input is single-cell data. Each read in BAM must contain CB and UB tag. (default: False)", 
-                        action='store_true',
-                        )    
-    
-    parser.add_argument('-out', '--DIR_out',  
-                        help='Directory to write output files (default: current directory)', 
-                        required=False, 
-                        type=str, 
+    optional.add_argument('-out', '--DIR_out',
+                        help='Directory to write output files (default: current directory)',
+                        required=False,
+                        type=str,
                         default=os.getcwd(),
                         )
 
     args = vars(parser.parse_args())
 
-    PATH_bam        = args["PATH_bam"]
-    PATH_str_tsv    = args["PATH_str_tsv"]
-    PATH_ref_genome = args["PATH_ref_genome"]
-    mapq_threshold  = args["mapping_quality"]
-    num_threads     = args["threads"]
-    flanking_length = args["flanking"]
-    realignment_f   = args["realignment_flanking"]
-    sc              = args["sc"]
-    DIR_out         = args["DIR_out"]
-    
-    bam_filename = os.path.splitext(os.path.basename(PATH_bam))[0]
-    
+    PATH_bam                = args['PATH_bam']
+    PATH_str_tsv            = args['PATH_str_tsv']
+    PATH_reference_genome   = args['PATH_reference_genome']
+    filename                = args['filename']
+    threads                 = args['threads']
+    flanking_length         = args['flanking']
+    DIR_out                 = args['DIR_out']
+        
     # Create log file
-    nanomnt_utility.checkAndCreate(DIR_out)
-    PATH_log = f"{DIR_out}/nanomnt.getAlleleTable.{bam_filename}.log"
+    scmnt_utility.checkAndCreate(DIR_out)
+    PATH_log = f"{DIR_out}/scmnt.getAlleleTable.{filename}.log"
     logging.basicConfig(filename=PATH_log, level=logging.INFO)
     logging.info(f"Listing inputs:")
     for k, v in args.items():
         logging.info(f'{k}\t:\t{v}')
         
-    runGetAlleleTable(PATH_bam, PATH_str_tsv, PATH_ref_genome, mapq_threshold, num_threads, flanking_length, realignment_f, sc, start_time, PATH_log, DIR_out)
-    logging.info(f"Finished getAlleleTable.py\t(Total time taken: {nanomnt_utility.getElapsedTime(start_time)} seconds)")
+    mapq_threshold              = 60
+    realignment_flanking_length = 50
+    
+    runGetAlleleTable( PATH_bam, PATH_str_tsv, PATH_reference_genome, mapq_threshold, threads, flanking_length, realignment_flanking_length, start_time, filename, DIR_out )
+    logging.info(f"Finished getAlleleTable.py\t(Total time taken: {scmnt_utility.getElapsedTime(start_time)} seconds)")
 
-        
 if __name__ == "__main__":
     main()

@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='scMnT',
-    version='0.1.0',    
+    version='0.1.1',    
     description='A collection of Python scripts for analyzing microsatellite instability in single-cell resolution',
     url='https://github.com/18parkky/scMnT',
     author='Gyumin Park',
@@ -10,11 +10,7 @@ setup(
     license='BSD 2-clause',
     packages=['scMnT'],
     entry_points={
-        'console_scripts' : [ 'getAlleleTable = scMnT.getAlleleTable:main', 
-                             'getLocusTable = scMnT.getLocusTable:main', 
-                             'findInformativeLoci = scMnT.findInformativeLoci:main', 
-			     'scMnT-score = scMnT.scMnT_score:main',
-			     'scMnT-find = scMnT.scMnT_find:main',                             
+        'console_scripts' : [ 'getAlleleTable = scMnT.getAlleleTable:main', 'scMnT-score = scMnT.scMnT_score:main', 'scMnT-find = scMnT.scMnT_find:main', 'scMnT = scMnT.scMnT:main',                            
 ] 
     },
     install_requires=['pysam>=0.20.0',
@@ -23,7 +19,8 @@ setup(
                       'pandas>=2.0.0',
                       'scipy>=1.7.1',
                       'matplotlib>=3.7.1',
-                      'seaborn>=0.13.0',           
+                      'seaborn>=0.13.0',
+                      'scanpy>=1.11.4',           
                       ],
 
     classifiers=[

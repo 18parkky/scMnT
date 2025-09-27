@@ -44,28 +44,31 @@ def getElapsedTime( start_time, rounding_point=2 ):
 def main():
     start_time  = time.time()
 
-    github_link = "https://github.com/18parkky/NanoMnT"
-    script_description = f"Given a Krait output file, filter out STR with low-complex flanking sequences"
+    github_link = "https://github.com/18parkky/scMnT"
+    script_description = f"Given a Krait output file, filter out STR loci with low-complex flanking sequences"
     parser = argparse.ArgumentParser(description=script_description)
     
+    required = parser.add_argument_group('Required arguments')
+    optional = parser.add_argument_group('Optional arguments')
+    
     # Required parameters
-    parser.add_argument('-k', '--dir_krait',      
-                        help="Directory of Krait output file", 
+    required.add_argument('-s', '--PATH_str_tsv',      
+                        help="PATH to STR list file generated using either Krait or Pytrf (.tsv)", 
                         required=True,
                         )
     
-    parser.add_argument('-r', '--dir_ref_genome',      
-                        help="Directory of reference genome", 
+    required.add_argument('-r', '--PATH_reference_genome',      
+                        help="PATH to reference genome", 
                         required=True,
                         )
     
-    parser.add_argument('-rn', '--reference_genome_name',      
-                        help="Name of the reference genome", 
-                        required=True,
+    optional.add_argument('-fn', '--filename',      
+                        help="Name of the output file (default: inferred from reference genome file)", 
+                        required=False,
                         )
     
-    parser.add_argument('-PATH', '--PATH_out',  
-                        help='PATH of the output files (default: current directory)', 
+    optional.add_argument('-out', '--DIR_out',  
+                        help='Directory to write output files (default: current directory)', 
                         required=False, 
                         type=str, 
                         default=os.getcwd(),
@@ -73,8 +76,8 @@ def main():
     
     args = vars(parser.parse_args())
 
-    dir_krait       = args["dir_krait"]
-    dir_ref_genome  = args["dir_ref_genome"]
+    PATH_krait                  = args["PATH_str_tsv"]
+    PATH_reference_genome       = args["PATH_reference_genome"]
     ref_genome_name = args["reference_genome_name"]
     PATH_out        = args["PATH_out"]
 
@@ -87,24 +90,21 @@ def main():
     for k, v in args.items():
         logging.info(f'{k}\t:\t{v}')
         
-    PATH_save_raw   = f"{PATH_out}/raw/{ref_genome_name}"
     PATH_save_filt  = f"{PATH_out}/filtered/{ref_genome_name}"
 
-    checkAndCreate(f"{PATH_out}/raw")
     checkAndCreate(f"{PATH_out}/filtered")
-    checkAndCreate(PATH_save_raw)
     checkAndCreate(PATH_save_filt)
         
-    df_krait = pd.read_csv(dir_krait, sep='\t')
+    STR_table = pd.read_csv(PATH_krait, sep='\t')
     
     # Label flanking sequences
-    ref_genome = pysam.FastaFile( dir_ref_genome )
+    ref_genome = pysam.FastaFile( PATH_reference_genome )
 
     flanking_length = 12
 
     list_lf_col, list_rf_col = list(), list()
 
-    for tup in df_krait.itertuples():
+    for tup in STR_table.itertuples():
         chromosome  = tup.sequence
         start_pos   = int( tup.start )
         end_pos     = int( tup.end )
@@ -124,20 +124,15 @@ def main():
             list_lf_col.append( None )
             list_rf_col.append( None )
 
-    df_krait["left_flanking_seq"] = list_lf_col
-    df_krait["right_flanking_seq"] = list_rf_col
+    STR_table["left_flanking_seq"] = list_lf_col
+    STR_table["right_flanking_seq"] = list_rf_col
     
     # Calculate 2mer complexity
-    df_krait["lf_2mer_complexity"] = [ calcSeqComplexity(lf, 2) for lf in df_krait["left_flanking_seq"] ]
-    df_krait["rf_2mer_complexity"] = [ calcSeqComplexity(rf, 2) for rf in df_krait["right_flanking_seq"] ]
-    
-    # Save raw krait 
-    for t, edf in df_krait.groupby("type"):
-        edf.to_csv(f"{PATH_save_raw}/{ref_genome_name}-{t}bp_STR.tsv.gz", compression="gzip", sep='\t', index=False)
+    STR_table["lf_2mer_complexity"] = [ calcSeqComplexity(lf, 2) for lf in STR_table["left_flanking_seq"] ]
+    STR_table["rf_2mer_complexity"] = [ calcSeqComplexity(rf, 2) for rf in STR_table["right_flanking_seq"] ]
         
     # Save filtered krait 
-    for t, edf in df_krait.groupby("type"):
-        if t not in [1, 2, 3]: continue
+    for t, edf in STR_table.groupby("type"):
         
         lf_avg, rf_avg = np.mean(edf["lf_2mer_complexity"]), np.mean(edf["rf_2mer_complexity"])
         lf_std, rf_std = np.std(edf["lf_2mer_complexity"]), np.std(edf["rf_2mer_complexity"])

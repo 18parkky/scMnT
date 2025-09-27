@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import scanpy as sc
 
-import scMnT.nanomnt_utility as nanomnt_utility
+import scmnt_utility
 
 def cliffs_delta(x, y):
     nx = len(x)
@@ -18,16 +18,17 @@ def cliffs_delta(x, y):
     delta = (n_greater - n_less) / (nx * ny)
     return delta
 
-def runscMSI_find( PATH_NANOMNT_SCANPY_ADATA, NORMAL_CELLTYPES, MINIMUM_LOCI, filename, DIR_OUT ):
+def runscMSI_find( adata, mininum_loci, filename, DIR_out ):
     
     # Load data
-    adata = sc.read_h5ad(PATH_NANOMNT_SCANPY_ADATA)
-    df = adata.obs[(adata.obs['NumSTRLoci']>=MINIMUM_LOCI)].copy()
+    adata_obs = adata.obs[(adata.obs['NumSTRLoci']>=mininum_loci)].copy()
 
-    NormalMSIscores = df[df['CellType'].isin(NORMAL_CELLTYPES)]['MSI_score']
+    NormalCellTypes = [ CellType for CellType in set(adata_obs['CellType']) if CellType[:5] != 'Tumor' ]
+    logging.info(f'Normal cell types:\t{", ".join(NormalCellTypes)}')
+    NormalMSIscores = adata_obs[adata_obs['CellType'].isin( NormalCellTypes )]['MSI_score']
 
     TestResults = list()
-    for CellType, edf in df[~(df['CellType'].isin(NORMAL_CELLTYPES))].groupby('CellType', observed=True):
+    for Tumor_CellType, edf in adata_obs[~(adata_obs['CellType'].isin(NormalCellTypes))].groupby('CellType', observed=True):
         MSI_scores = edf['MSI_score']
         
         sample_n = min([len(NormalMSIscores), len(MSI_scores)])
@@ -35,26 +36,12 @@ def runscMSI_find( PATH_NANOMNT_SCANPY_ADATA, NORMAL_CELLTYPES, MINIMUM_LOCI, fi
         stat, pval = scipy.stats.ks_2samp(MSI_scores.sample(sample_n, random_state=42), NormalMSIscores.sample(sample_n, random_state=42))
         delta = cliffs_delta(MSI_scores, NormalMSIscores)
 
-        TestResults.append( [CellType, pval, delta, sample_n] )
+        TestResults.append( [Tumor_CellType, pval, delta, sample_n] )
         
     TestResults = pd.DataFrame(TestResults, columns=['CT', 'pval', 'delta', 'n_cells'])
     TestResults['logPval'] = [ -np.log(pval+10**-10) for pval in TestResults['pval'] ]
     
-    TestResults.to_csv(f'{DIR_OUT}/{filename}.findMSI_results.tsv', sep='\t', index=False)
-
-    # pval_threshold  = 0.01 
-    # delta_threshold = 0.4
-
-    # MSI_celltypes = list()
-
-    # TestResults_significant = TestResults[(TestResults['pval']<=pval_threshold) & 
-    #                                     ((TestResults['delta']>=delta_threshold) | (TestResults['delta']<=-delta_threshold))]
-
-    # for tup in TestResults_significant.itertuples():
-    #     MSI_celltypes.append( tup.CT )
-
-    # TestResults_significant.reset_index(inplace=True, drop=True)
-    # TestResults_significant
+    TestResults.to_csv(f'{DIR_out}/{filename}.findMSI_results.tsv', sep='\t', index=False)
 
 def main():
     start_time  = time.time()
@@ -63,25 +50,28 @@ def main():
     script_description = f"[scMnT] Given a MSI score-labeled Scanpy object (output of scMSI-score.py), find MSI cells"
     parser = argparse.ArgumentParser(description=script_description)
 
+    required = parser.add_argument_group('Required arguments')
+    optional = parser.add_argument_group('Optional arguments')
+    
     # Required parameters
-    parser.add_argument('-a', '--PATH_NANOMNT_SCANPY_ADATA',      
-                        help="PATH to the single-cell Scanpy object with MSI score labeled (output of scMSI-score.py) *Cell group (e.g., cell type) must be pre-computed and accessible at adata.obs['CellGroup']", 
+    required.add_argument('-a', '--PATH_Scanpy_obj',      
+                        help="Path to Scanpy object (.h5ad) processed by scMnT_score.py",
                         required=True,
                         )
-
-    parser.add_argument('-n', '--NORMAL_CELLTYPES',      
-                        help="Comma separated list of normal cell types (cells that are surely MSS, such as monocytes) to use as reference (e.g., monocyte,T,fibroblast)", 
-                        required=True, type=str,
+    
+    required.add_argument('-n', '--filename',      
+                        help="Name of the output files", 
+                        required=True,
                         )
     
-    parser.add_argument('-m', '--MINIMUM_LOCI',     
-                        help="Minimum number of MS loci required per cell to be included in the analysis (default: 10). Cells with fewer loci will be excluded.", 
+    optional.add_argument('-m', '--mininum_loci',     
+                        help="Minimum number of MS loci per cell required for MSI/MSS identification (default: 10). Cells with fewer loci are excluded.",
                         required=False, 
                         type=int,
                         default=10,
                         )
     
-    parser.add_argument('-out', '--DIR_OUT',          
+    optional.add_argument('-out', '--DIR_out',          
                         help='Directory to write output files (default: current directory)', 
                         required=False, 
                         type=str, 
@@ -90,22 +80,23 @@ def main():
     
     args = vars(parser.parse_args())
     
-    PATH_NANOMNT_SCANPY_ADATA   = args["PATH_NANOMNT_SCANPY_ADATA"]
-    NORMAL_CELLTYPES            = [CT.strip() for CT in args["NORMAL_CELLTYPES"].split(',')]
-    MINIMUM_LOCI                = args['MINIMUM_LOCI']
-    DIR_OUT                     = args["DIR_OUT"]
-    
-    filename = os.path.splitext(os.path.basename(PATH_NANOMNT_SCANPY_ADATA))[0]
-    
-    nanomnt_utility.checkAndCreate(DIR_OUT)
-    PATH_log = f"{DIR_OUT}/nanomnt.scMSI_find.{filename}.log"
+    PATH_Scanpy_obj = args['PATH_Scanpy_obj']
+    filename        = args['filename']
+    mininum_loci    = args['mininum_loci']
+    DIR_out         = args["DIR_out"]
+        
+    scmnt_utility.checkAndCreate(DIR_out)
+    PATH_log = f"{DIR_out}/scMnT.scMSI_find.{filename}.log"
     logging.basicConfig(filename=PATH_log, level=logging.INFO)
     logging.info(f"Listing inputs:")
     for k, v in args.items():
         logging.info(f'{k}\t:\t{v}')
-        
-    runscMSI_find( PATH_NANOMNT_SCANPY_ADATA, NORMAL_CELLTYPES, MINIMUM_LOCI, filename, DIR_OUT )
-    logging.info(f"Finished scMSI-score.py\t(Total time taken: {nanomnt_utility.getElapsedTime(start_time)} seconds)")
+
+    # Load data
+    adata = sc.read_h5ad(PATH_Scanpy_obj)
+    
+    runscMSI_find( adata, mininum_loci, filename, DIR_out )
+    logging.info(f"Finished scMnT-score.py\t(Total time taken: {scmnt_utility.getElapsedTime(start_time)} seconds)")
 
         
 if __name__ == "__main__":
