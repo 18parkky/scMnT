@@ -2,13 +2,12 @@ import os
 import time
 import logging
 import argparse 
-
 import scipy.stats
 import numpy as np
 import pandas as pd
 import scanpy as sc
 
-import scmnt_utility
+import scMnT.scMnT_utility as scMnT_utility
 
 def cliffs_delta(x, y):
     nx = len(x)
@@ -18,13 +17,13 @@ def cliffs_delta(x, y):
     delta = (n_greater - n_less) / (nx * ny)
     return delta
 
-def runscMSI_find( adata, mininum_loci, filename, DIR_out ):
+def runscMSI_find( adata, minimum_loci, filename, DIR_out ):
     
     # Load data
-    adata_obs = adata.obs[(adata.obs['NumSTRLoci']>=mininum_loci)].copy()
+    adata_obs = adata.obs[(adata.obs['NumSTRLoci']>=minimum_loci)].copy()
 
     NormalCellTypes = [ CellType for CellType in set(adata_obs['CellType']) if CellType[:5] != 'Tumor' ]
-    logging.info(f'Normal cell types:\t{", ".join(NormalCellTypes)}')
+    logging.info(f'[scMnT-scMnT_find] Normal cell types:\t{", ".join(NormalCellTypes)}')
     NormalMSIscores = adata_obs[adata_obs['CellType'].isin( NormalCellTypes )]['MSI_score']
 
     TestResults = list()
@@ -47,7 +46,7 @@ def main():
     start_time  = time.time()
 
     github_link = "https://github.com/18parkky/scMnT"
-    script_description = f"[scMnT] Given a MSI score-labeled Scanpy object (output of scMSI-score.py), find MSI cells"
+    script_description = f"[scMnT] Given a MSI score-labeled Scanpy object (output of scMSI-score.py), find MSI cells. For details, see GitHub: {github_link}"
     parser = argparse.ArgumentParser(description=script_description)
 
     required = parser.add_argument_group('Required arguments')
@@ -64,7 +63,7 @@ def main():
                         required=True,
                         )
     
-    optional.add_argument('-m', '--mininum_loci',     
+    optional.add_argument('-m', '--minimum_loci',     
                         help="Minimum number of MS loci per cell required for MSI/MSS identification (default: 10). Cells with fewer loci are excluded.",
                         required=False, 
                         type=int,
@@ -82,21 +81,21 @@ def main():
     
     PATH_Scanpy_obj = args['PATH_Scanpy_obj']
     filename        = args['filename']
-    mininum_loci    = args['mininum_loci']
+    minimum_loci    = args['minimum_loci']
     DIR_out         = args["DIR_out"]
         
-    scmnt_utility.checkAndCreate(DIR_out)
+    scMnT_utility.checkAndCreate(DIR_out)
     PATH_log = f"{DIR_out}/scMnT.scMSI_find.{filename}.log"
     logging.basicConfig(filename=PATH_log, level=logging.INFO)
-    logging.info(f"Listing inputs:")
+    logging.info(f"[scMnT-scMnT_find] Listing inputs:")
     for k, v in args.items():
         logging.info(f'{k}\t:\t{v}')
 
     # Load data
     adata = sc.read_h5ad(PATH_Scanpy_obj)
     
-    runscMSI_find( adata, mininum_loci, filename, DIR_out )
-    logging.info(f"Finished scMnT-score.py\t(Total time taken: {scmnt_utility.getElapsedTime(start_time)} seconds)")
+    runscMSI_find( adata, minimum_loci, filename, DIR_out )
+    logging.info(f"[scMnT-scMnT_find]Finished scMnT-score.py\t(Total time taken: {scMnT_utility.getElapsedTime(start_time)} seconds)")
 
         
 if __name__ == "__main__":

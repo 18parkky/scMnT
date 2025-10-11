@@ -5,7 +5,8 @@ import argparse
 import numpy as np
 import pandas as pd
 import scanpy as sc
-import scmnt_utility
+
+import scMnT.scMnT_utility as scMnT_utility
 
 def preprocessAlleleTable( AlleleTable, min_STR_length, max_STR_length, include_GC_repeats=False ):
     
@@ -41,21 +42,52 @@ def runscMSI_score( adata, PATH_Allele_Table, minimum_MS_length, maximum_MS_leng
     AlleleTable = preprocessAlleleTable(AlleleTable, minimum_MS_length, maximum_MS_length)
     AlleleTable.to_csv(f'{DIR_out}/{filename}.AlleleTable.preprocessed.tsv', sep='\t', index=False)
 
-    if 'CB' not in list(adata.obs.columns):
-        adata.obs['CB'] = [ idx.split('-')[0] for idx in adata.obs.index ]
+    adata.obs['CB'] = [ idx.split('-')[0] for idx in adata.obs.index ]
         
     # [1] Create CB->MSProfile dictionary
     dict_CB_to_MSprofile = dict()
+    for k, v in dict_CB_to_MSprofile.items():
+        print(k, v)
+        break
 
     for CB, edf in AlleleTable.groupby("CB"):
         edf_o = edf['diff'].dropna()
         if len(edf_o) > 0:
-            dict_CB_to_MSprofile[CB] = [ np.mean(edf_o), np.std(edf_o), len(edf_o), -1 * np.mean(edf_o) * np.std(edf_o), ]
+            dict_CB_to_MSprofile[CB.split('-')[0]] = [ np.mean(edf_o), np.std(edf_o), len(edf_o), -1 * np.mean(edf_o) * np.std(edf_o), ]
 
     # [2] Overlay microsatellite information to Scanpy object
     MS_columns = ['AvgSTRDiff', 'StdSTRDiff', 'NumSTRLoci', 'MSI_score']
     # Retrieve MS profiles for each cell, defaulting to [0, 0, 0, 0] if CB not found
     MS_profile = [dict_CB_to_MSprofile.get(cb, [0, 0, 0, 0]) for cb in adata.obs['CB']]
+    for i, col in enumerate(MS_columns):
+        adata.obs[col] = [vals[i] for vals in MS_profile]
+    adata.write(f'{DIR_out}/{filename}.scMnT.h5ad')
+
+    return 
+
+# runscMSI_score for multiple sample
+def runscMSI_score_ms( adata, PATH_Allele_Table_merged, minimum_MS_length, maximum_MS_length, filename, DIR_out ):
+    
+    AlleleTable = pd.read_csv(PATH_Allele_Table_merged, sep='\t')
+    AlleleTable = preprocessAlleleTable(AlleleTable, minimum_MS_length, maximum_MS_length)
+    AlleleTable.to_csv(f'{DIR_out}/{filename}.AlleleTable.preprocessed.tsv', sep='\t', index=False)
+
+    adata.obs['CB'] = [ idx.split('-')[0] for idx in adata.obs.index ]
+    adata.obs['scMnT_Identifier']   = [ f'{tup.SampleID}_{tup.CB.split("-")[0]}' for tup in adata.obs.itertuples() ]
+    AlleleTable['scMnT_Identifier'] = [ f'{tup.SampleID}_{tup.CB.split("-")[0]}' for tup in AlleleTable.itertuples() ]
+    
+    # [1] Create scMnT_Identifier->MSProfile dictionary
+    dict_Identifier_to_MSprofile = dict()
+
+    for scMnT_Identifier, edf in AlleleTable.groupby("scMnT_Identifier"):
+        edf_o = edf['diff'].dropna()
+        if len(edf_o) > 0:
+            dict_Identifier_to_MSprofile[scMnT_Identifier] = [ np.mean(edf_o), np.std(edf_o), len(edf_o), -1 * np.mean(edf_o) * np.std(edf_o), ]
+
+    # [2] Overlay microsatellite information to Scanpy object
+    MS_columns = ['AvgSTRDiff', 'StdSTRDiff', 'NumSTRLoci', 'MSI_score']
+    # Retrieve MS profiles for each cell, defaulting to [0, 0, 0, 0] if CB not found
+    MS_profile = [dict_Identifier_to_MSprofile.get(scMnT_Identifier, [0, 0, 0, 0]) for scMnT_Identifier in adata.obs['scMnT_Identifier']]
     for i, col in enumerate(MS_columns):
         adata.obs[col] = [vals[i] for vals in MS_profile]
     adata.write(f'{DIR_out}/{filename}.scMnT.h5ad')
@@ -74,7 +106,7 @@ def main():
     
     # Required parameters
     required.add_argument('-a', '--PATH_Scanpy_obj',      
-                        help="Path to Scanpy object (.h5ad) with cell types in .obs['CellType']. Tumor cells must be labeled 'Tumor'.",
+                        help="Path to Scanpy object (.h5ad)",
                         required=True,
                         )
     
@@ -119,21 +151,21 @@ def main():
     maximum_MS_length   = args['maximum_MS_length']
     DIR_out             = args['DIR_out']
     
-    scmnt_utility.checkAndCreate(DIR_out)
+    scMnT_utility.checkAndCreate(DIR_out)
     PATH_log = f"{DIR_out}/scMnT.scMSI_score.{filename}.log"
     logging.basicConfig(filename=PATH_log, level=logging.INFO)
-    logging.info(f"Listing inputs:")
+    logging.info(f"[scMnT-scMnT_score] Listing inputs:")
     for k, v in args.items():
         logging.info(f'{k}\t:\t{v}')
 
     # Load data
     adata = sc.read_h5ad(PATH_Scanpy_obj)
     if 'CellType' not in list(adata.obs.columns):
-        logging.error(f"Cell type information must be available at .obs['CellType']!")
+        logging.error(f"[scMnT-scMnT_score] Cell type information must be available at .obs['CellType']!")
         raise ValueError
         
     runscMSI_score( adata, PATH_Allele_Table, minimum_MS_length, maximum_MS_length, filename, DIR_out )
-    logging.info(f"Finished scMnT_score.py\t(Total time taken: {scmnt_utility.getElapsedTime(start_time)} seconds)")
+    logging.info(f"[scMnT-scMnT_score] Finished scMnT_score.py\t(Total time taken: {scMnT_utility.getElapsedTime(start_time)} seconds)")
 
         
 if __name__ == "__main__":

@@ -1,0 +1,5 @@
+[console_scripts]
+getAlleleTable = scMnT.getAlleleTable:main
+scMnT = scMnT.scMnT:main
+scMnT-find = scMnT.scMnT_find:main
+scMnT-score = scMnT.scMnT_score:main

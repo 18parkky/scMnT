@@ -1,0 +1,30 @@
+Metadata-Version: 2.4
+Name: scMnT
+Version: 0.1.1
+Summary: A collection of Python scripts for analyzing microsatellite instability in single-cell resolution
+Home-page: https://github.com/18parkky/scMnT
+Author: Gyumin Park
+Author-email: 18parkky@gm.gist.ac.kr
+License: BSD 2-clause
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Science/Research
+Classifier: License :: OSI Approved :: BSD License
+Classifier: Operating System :: POSIX :: Linux
+Classifier: Programming Language :: Python :: 3.12.5
+License-File: LICENSE
+Requires-Dist: pysam>=0.20.0
+Requires-Dist: Levenshtein>=0.21.1
+Requires-Dist: numpy==1.26.4
+Requires-Dist: pandas>=2.0.0
+Requires-Dist: scipy>=1.7.1
+Requires-Dist: matplotlib>=3.7.1
+Requires-Dist: seaborn>=0.13.0
+Requires-Dist: scanpy>=1.11.4
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: home-page
+Dynamic: license
+Dynamic: license-file
+Dynamic: requires-dist
+Dynamic: summary
