@@ -13,9 +13,9 @@ import Levenshtein
 import pandas as pd
 import multiprocessing
 
-import scMnT_utility
+# import scMnT_utility
 
-# import scMnT.scMnT_utility as scMnT_utility
+import scMnT.scMnT_utility as scMnT_utility
 
 PILEUP_LIMIT = 5000000 # pysam's pileup's default value for max_depth is 8000
 
@@ -333,23 +333,6 @@ def count_loci_readcount( PATH_bam, STR_table, mapq_threshold, PATH_temp, count_
     dict_locus_to_nonzero_readcount = { k:v for k,v in dict_locus_to_readcount.items() if v>count_threshold }
     scMnT_utility.saveWithPickle(dict_locus_to_nonzero_readcount, PATH_temp, 'dict_locus_to_nonzero_readcount')
 
-def count_loci_readcount( PATH_bam, STR_table, mapq_threshold, PATH_temp, count_threshold=0):
-    bamfile = pysam.AlignmentFile(PATH_bam, 'rb')
-    dict_locus_to_readcount = dict()
-    for tup in STR_table.itertuples():
-        chrom = tup.sequence
-        start, end = tup.start, tup.end
-        dict_locus_to_readcount[tup.locus] = 0
-        for read in bamfile.fetch(chrom, start - 1, end,):
-            if read.is_secondary or read.is_supplementary or read.is_duplicate:
-                continue
-            if read.mapping_quality < mapq_threshold:
-                continue 
-            dict_locus_to_readcount[tup.locus] += 1
-            
-    dict_locus_to_nonzero_readcount = { k:v for k,v in dict_locus_to_readcount.items() if v>count_threshold }
-    scMnT_utility.saveWithPickle(dict_locus_to_nonzero_readcount, PATH_temp, 'dict_locus_to_nonzero_readcount')
-
 def chunk_loci_by_counts(STR_table, dict_locus_to_readcount, threads):
     # Initialize partitions
     loci_chunks = [dict() for i in range(threads)]
@@ -484,7 +467,6 @@ def runGetAlleleTable( PATH_bam, PATH_str_tsv, PATH_reference_genome, mapq_thres
     logging.info(f"[scMnT-getAlleleTable-{filename}] Writing STR allele table to disk")
     AlleleTable_merged.to_csv(f"{DIR_out}/{filename}.AlleleTable.tsv", sep='\t', index=False)
     
-
     for PATH_allele_table in list_PATH_allele_tables:
         os.remove( PATH_allele_table )
         
@@ -561,7 +543,7 @@ def main():
     scMnT_utility.checkAndCreate(DIR_out)
     PATH_log = f"{DIR_out}/scMnT.getAlleleTable.{filename}.log"
     logging.basicConfig(filename=PATH_log, level=logging.INFO)
-    logging.info(f"Listing inputs:")
+    logging.info(f"[scMnT-getAlleleTable-{filename}] Listing inputs:")
     for k, v in args.items():
         logging.info(f'  {k}\t:\t{v}')
         

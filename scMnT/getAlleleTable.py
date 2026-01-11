@@ -405,7 +405,10 @@ def cleanup_multiprocessing_results(PATH_multiprocess_out, filename, threads, st
             # Delete pickle files
             os.remove(PATH_pickle)
         
-        os.rmdir( f"{PATH_multiprocess_out}/thread_{idx}" )
+        try:
+            os.rmdir( f"{PATH_multiprocess_out}/thread_{idx}" )
+        except OSError: 
+            logging.warning(f"{PATH_multiprocess_out}/thread_{idx} could not be deleted")
         
     AlleleTable = pd.DataFrame(AlleleTable, columns=["read_name", "locus", "repeat_unit", "allele", "reference_STR_allele", "left_flanking_seq", "right_flanking_seq", "flag", "CB", "UMI"])
     logging.info(f"[scMnT-getAlleleTable-{filename}] Total of {len(set(AlleleTable['locus']))} microsatellite loci detected.\t(elapsed time: {scMnT_utility.getElapsedTime(start_time)} seconds)")
@@ -470,7 +473,11 @@ def runGetAlleleTable( PATH_bam, PATH_str_tsv, PATH_reference_genome, mapq_thres
     for PATH_allele_table in list_PATH_allele_tables:
         os.remove( PATH_allele_table )
         
-    os.rmdir(PATH_multiprocess_out)
+    try:
+        os.rmdir(PATH_multiprocess_out)
+    except OSError:
+        logging.warning(f"{PATH_multiprocess_out} could not be deleted")
+
     return
 
 def main():

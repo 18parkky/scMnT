@@ -8,6 +8,12 @@ dict_repeatUnit_to_favorableFlag = {
     "T" : 16,
 }
 
+def getFlankingSequence(chrom, start, end, genome):
+    seq = str()
+    for nt in genome.fetch(chrom, start-1, end):
+        seq += nt 
+    return seq.upper()
+        
 def calcHistogramDistance( allele_histogram_1, allele_histogram_2, method="euclidean"):
     
     key_1 = set(allele_histogram_1.keys())

@@ -42,16 +42,18 @@ def runscMSI_score( adata, PATH_Allele_Table, minimum_MS_length, maximum_MS_leng
     AlleleTable = preprocessAlleleTable(AlleleTable, minimum_MS_length, maximum_MS_length)
     AlleleTable.to_csv(f'{DIR_out}/{filename}.AlleleTable.preprocessed.tsv', sep='\t', index=False)
 
-    if 'CB' not in list(adata.obs.columns):
-        adata.obs['CB'] = [ idx.split('-')[0] for idx in adata.obs.index ]
+    adata.obs['CB'] = [ idx.split('-')[0] for idx in adata.obs.index ]
         
     # [1] Create CB->MSProfile dictionary
     dict_CB_to_MSprofile = dict()
+    for k, v in dict_CB_to_MSprofile.items():
+        print(k, v)
+        break
 
     for CB, edf in AlleleTable.groupby("CB"):
         edf_o = edf['diff'].dropna()
         if len(edf_o) > 0:
-            dict_CB_to_MSprofile[CB] = [ np.mean(edf_o), np.std(edf_o), len(edf_o), -1 * np.mean(edf_o) * np.std(edf_o), ]
+            dict_CB_to_MSprofile[CB.split('-')[0]] = [ np.mean(edf_o), np.std(edf_o), len(edf_o), -1 * np.mean(edf_o) * np.std(edf_o), ]
 
     # [2] Overlay microsatellite information to Scanpy object
     MS_columns = ['AvgSTRDiff', 'StdSTRDiff', 'NumSTRLoci', 'MSI_score']
@@ -70,9 +72,8 @@ def runscMSI_score_ms( adata, PATH_Allele_Table_merged, minimum_MS_length, maxim
     AlleleTable = preprocessAlleleTable(AlleleTable, minimum_MS_length, maximum_MS_length)
     AlleleTable.to_csv(f'{DIR_out}/{filename}.AlleleTable.preprocessed.tsv', sep='\t', index=False)
 
-    if 'CB' not in list(adata.obs.columns):
-        adata.obs['CB'] = [ idx.split('-')[0] for idx in adata.obs.index ]
-    adata.obs['scMnT_Identifier']   = [ f'{tup.SampleID}_{tup.CB}' for tup in adata.obs.itertuples() ]
+    adata.obs['CB'] = [ idx.split('-')[0] for idx in adata.obs.index ]
+    adata.obs['scMnT_Identifier']   = [ f'{tup.SampleID}_{tup.CB.split("-")[0]}' for tup in adata.obs.itertuples() ]
     AlleleTable['scMnT_Identifier'] = [ f'{tup.SampleID}_{tup.CB.split("-")[0]}' for tup in AlleleTable.itertuples() ]
     
     # [1] Create scMnT_Identifier->MSProfile dictionary
