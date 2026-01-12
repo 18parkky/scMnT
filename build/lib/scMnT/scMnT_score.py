@@ -33,6 +33,9 @@ def preprocessAlleleTable( AlleleTable, min_STR_length, max_STR_length, include_
     AlleleTable = AlleleTable[(AlleleTable['reference_STR_allele']<=max_STR_length) & (AlleleTable['reference_STR_allele']>=min_STR_length)].copy()
     
     AlleleTable['diff'] = AlleleTable['read_STR_allele'] - AlleleTable['reference_STR_allele']
+    
+    ### 4. Filter out uncorrected reads
+    AlleleTable = AlleleTable[(AlleleTable['corrected_allele']!='uncor')].copy()
 
     return AlleleTable
 
