@@ -45,8 +45,8 @@ Each step can also be called separately: (1) `getAlleleTable`, (2) `scMnT-score`
 ### 1) `scMnT`
 The `scMnT` command runs the entire scMnT workflow, from (1) collecting reads that map to MS loci (getAlleleTable), (2) labeling MS information for each cell onto the user-provided Scanpy object (scMnT-score), then (3) identifying MSI cell types by comparing MSI score distributions (scMnT-find). `scMnT` requires the following files as inputs. **In most cases, running this single command is all that’s needed.**
 - Scanpy object where cell type (or any other categorical cell annotation, e.g., Leiden clusters) information is available at .obs['CellType'] and cell barcodes (e.g., TAGTTGGCAGGTCCAC-1) must be available at .obs.index. Please ensure that each cell type has enough number of cells (>100).
-- If only using a single sample as input: a BAM where each read is tagged by its CB (CB tag) and UMI (UB tag)
-- If using multiple samples as input: a TSV file that provides two columns: one for name of each sample and one for specifying the path to its bamfile. The read in the bam file must have CB and UMI tagged.
+- *Recommended*: If only using a single sample as input: a BAM where each read is tagged by its CB (CB tag) and UMI (UB tag)
+- If using multiple samples as input: a sample sheet tab-separated file (TSV) file that provides two columns: one for name of each sample and one for specifying the path to its bamfile. The reads in the bam file must have CB and UMI tagged. Importantly, the Scanpy object must have sample name information available at .obs['SampleID'], and this must match the sample sheet TSV file! Only use this option if your Scanpy object is composed of multiple samples.
 - a list of MS loci (which can be generated using Krait)
 - the reference genome in FASTA format
 
