@@ -194,9 +194,9 @@ def main():
                     getAlleleTable.runGetAlleleTable( tup.PATH_BAM, PATH_str_tsv, PATH_reference_genome, mapq_threshold, threads, flanking_length, realignment_flanking_length, start_time, tup.SampleID, DIR_out_e )
                 else:
                     if resume==True:
-                        logging.info(f"Allele table for {tup.SampleID} found in: {PATH_Allele_Table}. Resuming previous run")
+                        logging.info(f"Allele table for {tup.SampleID} found in: {PATH_Allele_Table_e}. Resuming previous run")
                     else:
-                        logging.error(f"Allele table for {tup.SampleID} found in: {PATH_Allele_Table}! Use --resume parameter to continue from previous run")
+                        logging.error(f"Allele table for {tup.SampleID} found in: {PATH_Allele_Table_e}! Use --resume parameter to continue from previous run")
                         raise ValueError            
                     
                 # Label sample 
